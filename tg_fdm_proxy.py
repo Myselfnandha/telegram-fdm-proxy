@@ -3,9 +3,16 @@ import re
 import asyncio
 import socket
 import logging
+import json
+import io
+from datetime import datetime
 from aiohttp import web
 from telethon import TelegramClient, events, Button
 from dotenv import load_dotenv
+try:
+    import qrcode
+except ImportError:
+    qrcode = None
 
 # Global state for batch mode
 batch_mode = False
@@ -13,6 +20,45 @@ batch_queue = []
 
 # Configuration
 ALLOWED_EXTENSIONS = None  # None means allow all
+
+# Analytics and subscription storage
+analytics_file = 'download_analytics.json'
+subscriptions_file = 'subscriptions.json'
+
+def load_json(file):
+    try:
+        if os.path.exists(file):
+            with open(file, 'r') as f:
+                return json.load(f)
+    except:
+        pass
+    return {} if 'subscriptions' in file else {'downloads': [], 'stats': {}}
+
+def save_json(file, data):
+    with open(file, 'w') as f:
+        json.dump(data, f, indent=2)
+
+def track_download(file_name, file_size_mb, status='success'):
+    data = load_json(analytics_file)
+    if 'downloads' not in data:
+        data['downloads'] = []
+    data['downloads'].append({
+        'timestamp': datetime.now().isoformat(),
+        'file_name': file_name,
+        'file_size_mb': file_size_mb,
+        'status': status
+    })
+    if 'stats' not in data:
+        data['stats'] = {}
+    data['stats']['total_downloads'] = len(data['downloads'])
+    data['stats']['total_size_mb'] = sum(d['file_size_mb'] for d in data['downloads'])
+    save_json(analytics_file, data)
+
+def load_subscriptions():
+    return load_json(subscriptions_file)
+
+def save_subscriptions(subs):
+    save_json(subscriptions_file, subs)
 
 def ensure_env():
     """Checks for .env variables and prompts for setup if missing."""
@@ -72,16 +118,34 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def find_free_port(start_port=8080, max_attempts=100):
-    """Find an available port starting from start_port."""
-    for port in range(start_port, start_port + max_attempts):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
-                s.bind(('127.0.0.1', port))
-                return port
-            except OSError:
-                continue
-    raise RuntimeError(f"No free ports found between {start_port} and {start_port + max_attempts - 1}")
+def generate_qr_code(url):
+    """Generate QR code from URL."""
+    if not qrcode:
+        return None
+    qr = qrcode.QRCode(version=1, box_size=10, border=5)
+    qr.add_data(url)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    return img
+
+async def send_qr_code(event, url, file_name, file_size_mb):
+    """Send QR code to user via Telegram."""
+    if not qrcode:
+        return
+    try:
+        img = generate_qr_code(url)
+        if img:
+            bio = io.BytesIO()
+            img.save(bio, format='PNG')
+            bio.seek(0)
+            await event.client.send_file(
+                event.chat_id,
+                bio,
+                caption=f"📱 **Mobile Scan QR Code**\n\n📄 {file_name}\n📏 {file_size_mb:.2f} MB\n\n_(Scan with mobile to open link)_",
+                filename=f'qr_{file_size_mb:.0f}mb.png'
+            )
+    except Exception as e:
+        logger.error(f"Error sending QR code: {e}")
 
 async def handle_download(request):
     chat_id = int(request.match_info['chat_id'])
@@ -201,16 +265,110 @@ async def dashboard(request):
                     <li>🔄 Web dashboard (you're here!)</li>
                 </ul>
             </div>
+            <div class="stat">
+                <h2>📊 Download Analytics</h2>
+                <p id="analytics-data">Loading analytics...</p>
+            </div>
             
             <div style="text-align: center; margin-top: 20px;">
                 <a href="https://github.com/Myselfnandha/telegram-fdm-proxy" class="btn" target="_blank">View on GitHub</a>
                 <a href="https://github.com/Myselfnandha/telegram-fdm-proxy/blob/main/README.md" class="btn" target="_blank">Documentation</a>
             </div>
         </div>
-    </body>
-    </html>
+        <script>
+            // Load and display analytics
+            fetch('/analytics-data')
+                .then(r => r.json())
+                .then(data => {{
+                    let html = '';
+                    if (data.stats.total_downloads) {{
+                        html = `
+                            <ul>
+                                <li>📥 <strong>Total Downloads:</strong> ${{data.stats.total_downloads}}</li>
+                                <li>📊 <strong>Total Size:</strong> ${{data.stats.total_size_mb.toFixed(2)}} MB</li>
+                                <li>📈 <strong>Recent:</strong> ${{data.downloads.slice(-3).map(d => d.file_name).reverse().join(', ')}}</li>
+                            </ul>
+                        `;
+                    }} else {{
+                        html = '<p>No downloads recorded yet</p>';
+                    }}
+                    document.getElementById('analytics-data').innerHTML = html;
+                }})
+                .catch(() => document.getElementById('analytics-data').innerHTML = 'Analytics unavailable');
+        </script>
     """
     return web.Response(text=html, content_type='text/html')
+
+async def analytics_endpoint(request):
+    data = load_json(analytics_file)
+    return web.json_response(data)
+
+@client.on(events.NewMessage(pattern='/stats'))
+async def stats_command(event):
+    data = load_json(analytics_file)
+    if not data.get('downloads'):
+        await event.reply("📊 **No download statistics yet**")
+        return
+    
+    total_dl = data['stats'].get('total_downloads', 0)
+    total_size = data['stats'].get('total_size_mb', 0)
+    recent = data['downloads'][-5:] if data['downloads'] else []
+    
+    msg = f"📊 **Download Statistics**\n\n"
+    msg += f"📥 **Total Downloads:** {total_dl}\n"
+    msg += f"💾 **Total Size:** {total_size:.2f} MB\n"
+    msg += f"📈 **Average Size:** {total_size/total_dl if total_dl else 0:.2f} MB\n\n"
+    msg += "**Recent Downloads:**\n"
+    for d in recent:
+        msg += f"• {d['file_name']} ({d['file_size_mb']:.2f} MB)\n"
+    
+    await event.reply(msg)
+
+@client.on(events.NewMessage(pattern=r'/subscribe'))
+async def subscribe_channel(event):
+    args = event.text.split()
+    if len(args) < 2:
+        await event.reply("Usage: `/subscribe @channel` or `/subscribe channel_name`")
+        return
+    
+    channel = args[1]
+    subs = load_subscriptions()
+    if channel not in subs:
+        subs[channel] = {'enabled': True, 'count': 0}
+        save_subscriptions(subs)
+        await event.reply(f"✅ **Subscribed to {channel}**\n\nI'll monitor this channel for new media files!")
+    else:
+        await event.reply(f"⚠️ **Already subscribed to {channel}**")
+    logger.info(f"User subscribed to channel: {channel}")
+
+@client.on(events.NewMessage(pattern='/subscriptions'))
+async def list_subscriptions(event):
+    subs = load_subscriptions()
+    if not subs:
+        await event.reply("📭 **No subscribed channels yet**\n\nUse `/subscribe @channel` to follow channels")
+        return
+    
+    msg = "📺 **Subscribed Channels:**\n\n"
+    for channel, data in subs.items():
+        msg += f"• {channel} - {data['count']} files downloaded\n"
+    msg += f"\n**Total:** {len(subs)} channel(s)"
+    await event.reply(msg)
+
+@client.on(events.NewMessage(pattern=r'/unsubscribe'))
+async def unsubscribe_channel(event):
+    args = event.text.split()
+    if len(args) < 2:
+        await event.reply("Usage: `/unsubscribe @channel`")
+        return
+    
+    channel = args[1]
+    subs = load_subscriptions()
+    if channel in subs:
+        del subs[channel]
+        save_subscriptions(subs)
+        await event.reply(f"❌ **Unsubscribed from {channel}**")
+    else:
+        await event.reply(f"⚠️ **Not subscribed to {channel}**")
 
 @client.on(events.CallbackQuery(pattern=r'info_(\d+)'))
 async def info_callback(event):
@@ -268,27 +426,6 @@ async def end_batch(event):
     logger.info(f"Batch completed: {len(batch_queue)} files, {total_size:.2f} MB total")
     batch_queue = []
 
-@client.on(events.NewMessage(pattern='/upgrade'))
-async def upgrade_command(event):
-    version = "2.0.0"  # Current version
-    features = [
-        "✅ Batch Download Mode",
-        "✅ Web Dashboard", 
-        "✅ Inline Buttons & File Info",
-        "✅ Docker Support",
-        "✅ Retry Logic",
-        "✅ Portable Executable"
-    ]
-    
-    response = f"**🚀 Telegram FDM Proxy v{version}**\n\n"
-    response += "**Current Features:**\n" + "\n".join(features) + "\n\n"
-    response += f"🌐 **Dashboard:** http://127.0.0.1:{config['port']}\n"
-    response += "📦 **Batch Mode:** `/start_batch` to begin queuing\n"
-    response += "🔗 **GitHub:** https://github.com/Myselfnandha/telegram-fdm-proxy\n\n"
-    response += "_Bot is up to date!_"
-    
-    await event.reply(response)
-
 @client.on(events.NewMessage(incoming=True))
 async def on_new_message(event):
     if event.message.media and event.message.file:
@@ -306,8 +443,12 @@ async def on_new_message(event):
         if batch_mode:
             # Add to batch queue
             batch_queue.append((file_name, file_size_mb, link))
+            track_download(file_name, file_size_mb, 'queued')
             await event.reply(f"📦 **Added to Batch:** {file_name} ({file_size_mb:.2f} MB)\nQueue size: {len(batch_queue)} files")
         else:
+            # Track download
+            track_download(file_name, file_size_mb, 'created_link')
+            
             # Reply with the link and inline buttons
             buttons = [
                 [Button.url("📥 Open in FDM", link)],
@@ -321,6 +462,9 @@ async def on_new_message(event):
                 f"_(Click the button above or copy the link into Free Download Manager)_",
                 buttons=buttons
             )
+            
+            # Send QR code for mobile scanning
+            await send_qr_code(event, link, file_name, file_size_mb)
 
 async def main():
     print("⏳ Starting Telegram FDM Proxy...")
@@ -332,6 +476,7 @@ async def main():
     app = web.Application()
     app.router.add_get('/dl/{chat_id}/{message_id}', handle_download)
     app.router.add_get('/', dashboard)
+    app.router.add_get('/analytics-data', analytics_endpoint)
     
     # Find an available port
     port = find_free_port()

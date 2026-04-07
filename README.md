@@ -6,8 +6,9 @@ A powerful Telegram bot that acts as a proxy for Free Download Manager (FDM) to 
 
 - 🔗 **Automatic Download Links**: Generates HTTP links for any media file sent to the bot
 - 📦 **Batch Download Mode**: Queue multiple files with `/start_batch` and `/end_batch` commands
-- 🎛️ **Web Dashboard**: Monitor status and get usage instructions at `http://127.0.0.1:{port}`
-- � **Retry Logic**: Automatic retries for failed downloads with exponential backoff
+- 🎛️ **Web Dashboard**: Monitor status and get usage instructions at `http://127.0.0.1:{port}`- 📊 **Download Analytics**: Track downloads, view statistics with `/stats` command
+- 📱 **QR Code Generation**: Automatic QR codes for easy mobile scanning and link sharing
+- 📺 **Channel Subscriptions**: Auto-monitor and download from subscribed channels- � **Retry Logic**: Automatic retries for failed downloads with exponential backoff
 - 🎯 **Advanced Telegram Features**: Inline buttons for quick actions and file information
 - 🌐 **Cross-Platform**: Docker support for Linux/Mac deployment
 - 📱 **Portable Executable**: Standalone Windows .exe with all dependencies included
@@ -68,18 +69,41 @@ BOT_TOKEN=your_bot_token
 /end_batch    # Get all download links at once
 ```
 
-### Bot Commands
-```
-/upgrade      # Show bot version and features
-/start_batch  # Begin batch download mode
-/end_batch    # Complete batch and get all links
-```
-
 ### Web Dashboard
 Visit `http://127.0.0.1:{port}` in your browser for:
 - Current status and port information
 - Usage instructions
 - Links to documentation
+- Real-time download analytics
+
+### Download Analytics & Statistics
+Track your downloads with built-in analytics:
+```
+/stats  # View download statistics
+```
+Shows:
+- Total downloads count
+- Total downloaded size
+- Average file size
+- Recent downloads history
+
+### Mobile QR Code Links
+Every download link automatically generates a QR code:
+- Scan with mobile device for quick access
+- Sent automatically with each file
+- No extra steps needed
+
+### Channel Subscriptions
+Auto-monitor and download from Telegram channels:
+```
+/subscribe @channel_name    # Subscribe to a channel
+/subscriptions             # List all subscribed channels
+/unsubscribe @channel_name # Unsubscribe from a channel
+```
+Features:
+- Automatic new media detection
+- Download tracking per channel
+- Easy management of subscriptions
 
 ## Advanced Configuration
 
