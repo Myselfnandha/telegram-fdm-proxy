@@ -4,8 +4,20 @@ import asyncio
 import socket
 import logging
 from aiohttp import web
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, Button
 from dotenv import load_dotenv
+
+# Global state for batch mode
+batch_mode = False
+batch_queue = []
+
+# Configuration
+MAX_FILE_SIZE_MB = 2000  # 2GB limit
+ALLOWED_EXTENSIONS = None  # None means allow all
+MAX_CONCURRENT_DOWNLOADS = 5  # Limit concurrent downloads
+
+# Global semaphore for download limiting
+download_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
 
 def ensure_env():
     """Checks for .env variables and prompts for setup if missing."""
@@ -80,71 +92,187 @@ async def handle_download(request):
     chat_id = int(request.match_info['chat_id'])
     message_id = int(request.match_info['message_id'])
 
-    try:
-        # Retrieve the specific message containing the media
-        message = await client.get_messages(chat_id, ids=message_id)
-        if not message or not message.media or not hasattr(message, 'file'):
-            return web.Response(status=404, text="Message not found or does not contain media.")
+    async with download_semaphore:
+        try:
+            # Retrieve the specific message containing the media
+            message = await client.get_messages(chat_id, ids=message_id)
+            if not message or not message.media or not hasattr(message, 'file'):
+                return web.Response(status=404, text="Message not found or does not contain media.")
 
-        file_size = message.file.size
-        # Sanitize filename (FDM expects normal filenames)
-        file_name = message.file.name if message.file.name else f"tg_media_{message_id}.bin"
-        file_name = "".join([c for c in file_name if (c.isalnum() or c in " .-_")]).strip()
+            file_size = message.file.size
+            # Sanitize filename (FDM expects normal filenames)
+            file_name = message.file.name if message.file.name else f"tg_media_{message_id}.bin"
+            file_name = "".join([c for c in file_name if (c.isalnum() or c in " .-_")]).strip()
 
-        range_header = request.headers.get('Range', '')
-        status = 200
-        start = 0
-        end = file_size - 1
+            range_header = request.headers.get('Range', '')
+            status = 200
+            start = 0
+            end = file_size - 1
 
-        # Parse HTTP Range Header for multi-threaded downloading in FDM
-        if range_header:
-            match = re.search(r'bytes=(\d+)-(\d*)', range_header)
-            if match:
-                start = int(match.group(1))
-                if match.group(2):
-                    end = int(match.group(2))
-            status = 206
+            # Parse HTTP Range Header for multi-threaded downloading in FDM
+            if range_header:
+                match = re.search(r'bytes=(\d+)-(\d*)', range_header)
+                if match:
+                    start = int(match.group(1))
+                    if match.group(2):
+                        end = int(match.group(2))
+                status = 206
 
-        length = end - start + 1
+            length = end - start + 1
 
-        headers = {
-            'Content-Type': 'application/octet-stream',
-            'Content-Disposition': f'attachment; filename="{file_name}"',
-            'Accept-Ranges': 'bytes',
-            'Content-Range': f'bytes {start}-{end}/{file_size}',
-            'Content-Length': str(length)
-        }
+            headers = {
+                'Content-Type': 'application/octet-stream',
+                'Content-Disposition': f'attachment; filename="{file_name}"',
+                'Accept-Ranges': 'bytes',
+                'Content-Range': f'bytes {start}-{end}/{file_size}',
+                'Content-Length': str(length)
+            }
 
-        response = web.StreamResponse(status=status, headers=headers)
-        await response.prepare(request)
+            response = web.StreamResponse(status=status, headers=headers)
+            await response.prepare(request)
 
-        # Stream chunks from Telegram server to FDM directly
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                async for chunk in client.iter_download(
-                    message.media,
-                    offset=start,
-                    limit=length,
-                    chunk_size=1024 * 1024  # 1 MB blocks
-                ):
-                    await response.write(chunk)
-                break  # Success
-            except Exception as chunk_e:
-                if attempt == max_retries - 1:
-                    raise chunk_e
-                print(f"⚠️  Download attempt {attempt + 1} failed: {chunk_e}, retrying...")
-                await asyncio.sleep(1)  # Wait before retry
+            # Stream chunks from Telegram server to FDM directly
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    async for chunk in client.iter_download(
+                        message.media,
+                        offset=start,
+                        limit=length,
+                        chunk_size=1024 * 1024  # 1 MB blocks
+                    ):
+                        await response.write(chunk)
+                    break  # Success
+                except Exception as chunk_e:
+                    if attempt == max_retries - 1:
+                        raise chunk_e
+                    print(f"⚠️  Download attempt {attempt + 1} failed: {chunk_e}, retrying...")
+                    await asyncio.sleep(1)  # Wait before retry
 
-        return response
+            return response
     
-    except ConnectionResetError:
-        # FDM closed a specific connection thread, standard behavior in multi-threading
-        return response
+        except ConnectionResetError:
+            # FDM closed a specific connection thread, standard behavior in multi-threading
+            return response
+        except Exception as e:
+            print(f"❌ Error during download for chat {chat_id}, message {message_id}: {e}")
+            logger.error(f"Download error for chat {chat_id}, message {message_id}: {e}")
+            return web.Response(status=500, text=f"Download failed: {str(e)}")
+
+async def dashboard(request):
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Telegram FDM Proxy Dashboard</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }}
+            .container {{ max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+            .stat {{ background: #f8f9fa; padding: 15px; margin: 10px 0; border-left: 4px solid #007bff; }}
+            .header {{ text-align: center; color: #333; }}
+            .status {{ color: #28a745; font-weight: bold; }}
+            .btn {{ display: inline-block; padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 4px; margin: 5px; }}
+            .btn:hover {{ background: #0056b3; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1 class="header">📥 Telegram FDM Proxy Dashboard</h1>
+            
+            <div class="stat">
+                <h2>🚀 Status</h2>
+                <p class="status">✅ Bot Connected & Running</p>
+                <p>🌐 Server Port: <strong>{config['port']}</strong></p>
+                <p>🔗 Dashboard URL: <code>http://127.0.0.1:{config['port']}</code></p>
+            </div>
+            
+            <div class="stat">
+                <h2>📋 How to Use</h2>
+                <ol>
+                    <li>Forward any media file (photo, video, document) to your Telegram bot</li>
+                    <li>Copy the generated download link</li>
+                    <li>Paste the link into Free Download Manager</li>
+                    <li>Enjoy fast, multi-threaded downloads!</li>
+                </ol>
+            </div>
+            
+            <div class="stat">
+                <h2>⚙️ Features</h2>
+                <ul>
+                    <li>✅ Automatic port selection</li>
+                    <li>✅ Retry logic for failed downloads</li>
+                    <li>✅ Enhanced error logging</li>
+                    <li>✅ Portable executable</li>
+                    <li>🔄 Batch download mode (coming soon)</li>
+                    <li>🔄 Web dashboard (you're here!)</li>
+                </ul>
+            </div>
+            
+            <div style="text-align: center; margin-top: 20px;">
+                <a href="https://github.com/Myselfnandha/telegram-fdm-proxy" class="btn" target="_blank">View on GitHub</a>
+                <a href="https://github.com/Myselfnandha/telegram-fdm-proxy/blob/main/README.md" class="btn" target="_blank">Documentation</a>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    return web.Response(text=html, content_type='text/html')
+
+@client.on(events.CallbackQuery(pattern=r'info_(\d+)'))
+async def info_callback(event):
+    message_id = int(event.pattern_match.group(1))
+    
+    try:
+        message = await client.get_messages(event.chat_id, ids=message_id)
+        if message and message.file:
+            info = "📄 **File Information**\n\n"
+            info += f"**Name:** {message.file.name or 'Unknown'}\n"
+            info += f"**Size:** {message.file.size / (1024*1024):.2f} MB\n"
+            info += f"**MIME Type:** {message.file.mime_type or 'Unknown'}\n"
+            if hasattr(message.file, 'duration') and message.file.duration:
+                info += f"**Duration:** {message.file.duration} seconds\n"
+            if hasattr(message.file, 'width') and message.file.width:
+                info += f"**Dimensions:** {message.file.width}x{message.file.height}\n"
+            
+            await event.answer()
+            await event.edit(info)
+        else:
+            await event.answer("File information not available")
     except Exception as e:
-        print(f"❌ Error during download for chat {chat_id}, message {message_id}: {e}")
-        logger.error(f"Download error for chat {chat_id}, message {message_id}: {e}")
-        return web.Response(status=500, text=f"Download failed: {str(e)}")
+        await event.answer("Error retrieving file info")
+        logger.error(f"Error in info callback: {e}")
+
+@client.on(events.NewMessage(pattern='/start_batch'))
+async def start_batch(event):
+    global batch_mode, batch_queue
+    batch_mode = True
+    batch_queue = []
+    await event.reply("📦 **Batch Mode Started!**\n\nSend me multiple files and they'll be queued. Use `/end_batch` when done to get all download links at once.")
+    logger.info(f"Batch mode started by user {event.sender_id}")
+
+@client.on(events.NewMessage(pattern='/end_batch'))
+async def end_batch(event):
+    global batch_mode, batch_queue
+    if not batch_mode:
+        await event.reply("❌ Batch mode is not active. Use `/start_batch` first.")
+        return
+    
+    batch_mode = False
+    if not batch_queue:
+        await event.reply("📦 Batch completed - no files were queued.")
+        return
+    
+    response = "**📦 Batch Download Links:**\n\n"
+    total_size = 0
+    for i, (file_name, file_size_mb, link) in enumerate(batch_queue, 1):
+        response += f"{i}. **{file_name}** ({file_size_mb:.2f} MB)\n`{link}`\n\n"
+        total_size += file_size_mb
+    
+    response += f"**Total: {len(batch_queue)} files ({total_size:.2f} MB)**\n\nCopy these links into Free Download Manager for batch download!"
+    
+    await event.reply(response)
+    logger.info(f"Batch completed: {len(batch_queue)} files, {total_size:.2f} MB total")
+    batch_queue = []
 
 @client.on(events.NewMessage(incoming=True))
 async def on_new_message(event):
@@ -156,16 +284,40 @@ async def on_new_message(event):
         file_name = event.message.file.name if event.message.file.name else "Unknown File"
         file_size_mb = event.message.file.size / (1024 * 1024)
 
+        # File size check
+        if file_size_mb > MAX_FILE_SIZE_MB:
+            await event.reply(f"❌ **File Too Large:** {file_name} ({file_size_mb:.2f} MB) exceeds the {MAX_FILE_SIZE_MB} MB limit.")
+            return
+
+        # File extension check (if configured)
+        if ALLOWED_EXTENSIONS:
+            ext = file_name.split('.')[-1].lower() if '.' in file_name else ''
+            if ext not in ALLOWED_EXTENSIONS:
+                await event.reply(f"❌ **File Type Not Allowed:** {file_name} (allowed: {', '.join(ALLOWED_EXTENSIONS)})")
+                return
+
         print(f"\n📥 Received: {file_name} ({file_size_mb:.2f} MB)")
         print(f"🔗 FDM Link: {link}\n")
         logger.info(f"Received file: {file_name} ({file_size_mb:.2f} MB) from chat {chat_id}, message {message_id}")
 
-        # Reply with the link so you can easily copy it
-        await event.reply(
-            f"**File Ready for FDM!**\n\n"
-            f"`{link}`\n\n"
-            f"_(Copy and Paste this link into Free Download Manager)_"
-        )
+        if batch_mode:
+            # Add to batch queue
+            batch_queue.append((file_name, file_size_mb, link))
+            await event.reply(f"📦 **Added to Batch:** {file_name} ({file_size_mb:.2f} MB)\nQueue size: {len(batch_queue)} files")
+        else:
+            # Reply with the link and inline buttons
+            buttons = [
+                [Button.url("📥 Open in FDM", link)],
+                [Button.inline("ℹ️ File Info", f"info_{message_id}")]
+            ]
+            await event.reply(
+                f"**File Ready for FDM!**\n\n"
+                f"📄 **{file_name}**\n"
+                f"📏 **Size:** {file_size_mb:.2f} MB\n\n"
+                f"`{link}`\n\n"
+                f"_(Click the button above or copy the link into Free Download Manager)_",
+                buttons=buttons
+            )
 
 async def main():
     print("⏳ Starting Telegram FDM Proxy...")
@@ -176,6 +328,7 @@ async def main():
 
     app = web.Application()
     app.router.add_get('/dl/{chat_id}/{message_id}', handle_download)
+    app.router.add_get('/', dashboard)
     
     # Find an available port
     port = find_free_port()
