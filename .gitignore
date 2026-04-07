@@ -1,0 +1,27 @@
+# Telegram FDM Proxy - GitIgnore
+
+# Environment variables
+.env
+
+# Session files
+*.session
+*.session-journal
+*.session.backup
+
+# Build artifacts
+build/
+dist/
+*.spec
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
