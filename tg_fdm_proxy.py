@@ -268,6 +268,27 @@ async def end_batch(event):
     logger.info(f"Batch completed: {len(batch_queue)} files, {total_size:.2f} MB total")
     batch_queue = []
 
+@client.on(events.NewMessage(pattern='/upgrade'))
+async def upgrade_command(event):
+    version = "2.0.0"  # Current version
+    features = [
+        "✅ Batch Download Mode",
+        "✅ Web Dashboard", 
+        "✅ Inline Buttons & File Info",
+        "✅ Docker Support",
+        "✅ Retry Logic",
+        "✅ Portable Executable"
+    ]
+    
+    response = f"**🚀 Telegram FDM Proxy v{version}**\n\n"
+    response += "**Current Features:**\n" + "\n".join(features) + "\n\n"
+    response += f"🌐 **Dashboard:** http://127.0.0.1:{config['port']}\n"
+    response += "📦 **Batch Mode:** `/start_batch` to begin queuing\n"
+    response += "🔗 **GitHub:** https://github.com/Myselfnandha/telegram-fdm-proxy\n\n"
+    response += "_Bot is up to date!_"
+    
+    await event.reply(response)
+
 @client.on(events.NewMessage(incoming=True))
 async def on_new_message(event):
     if event.message.media and event.message.file:
