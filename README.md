@@ -68,6 +68,13 @@ BOT_TOKEN=your_bot_token
 /end_batch    # Get all download links at once
 ```
 
+### Bot Commands
+```
+/upgrade      # Show bot version and features
+/start_batch  # Begin batch download mode
+/end_batch    # Complete batch and get all links
+```
+
 ### Web Dashboard
 Visit `http://127.0.0.1:{port}` in your browser for:
 - Current status and port information
