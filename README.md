@@ -7,9 +7,7 @@ A powerful Telegram bot that acts as a proxy for Free Download Manager (FDM) to 
 - 🔗 **Automatic Download Links**: Generates HTTP links for any media file sent to the bot
 - 📦 **Batch Download Mode**: Queue multiple files with `/start_batch` and `/end_batch` commands
 - 🎛️ **Web Dashboard**: Monitor status and get usage instructions at `http://127.0.0.1:{port}`
-- 📏 **File Management**: Size limits (2GB default) and file type filtering
-- 🔄 **Retry Logic**: Automatic retries for failed downloads with exponential backoff
-- 🚀 **Performance Optimized**: Concurrent download limits and connection pooling
+- � **Retry Logic**: Automatic retries for failed downloads with exponential backoff
 - 🎯 **Advanced Telegram Features**: Inline buttons for quick actions and file information
 - 🌐 **Cross-Platform**: Docker support for Linux/Mac deployment
 - 📱 **Portable Executable**: Standalone Windows .exe with all dependencies included
@@ -77,11 +75,6 @@ Visit `http://127.0.0.1:{port}` in your browser for:
 - Links to documentation
 
 ## Advanced Configuration
-
-### File Limits
-- **Max File Size**: 2000 MB (configurable in source)
-- **Concurrent Downloads**: 5 simultaneous downloads max
-- **Allowed Extensions**: All types allowed by default
 
 ### Performance Tuning
 - Connection pooling for multiple downloads

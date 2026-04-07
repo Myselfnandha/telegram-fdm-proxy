@@ -12,12 +12,7 @@ batch_mode = False
 batch_queue = []
 
 # Configuration
-MAX_FILE_SIZE_MB = 2000  # 2GB limit
 ALLOWED_EXTENSIONS = None  # None means allow all
-MAX_CONCURRENT_DOWNLOADS = 5  # Limit concurrent downloads
-
-# Global semaphore for download limiting
-download_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
 
 def ensure_env():
     """Checks for .env variables and prompts for setup if missing."""
@@ -92,8 +87,7 @@ async def handle_download(request):
     chat_id = int(request.match_info['chat_id'])
     message_id = int(request.match_info['message_id'])
 
-    async with download_semaphore:
-        try:
+    try:
             # Retrieve the specific message containing the media
             message = await client.get_messages(chat_id, ids=message_id)
             if not message or not message.media or not hasattr(message, 'file'):
@@ -150,14 +144,14 @@ async def handle_download(request):
                     await asyncio.sleep(1)  # Wait before retry
 
             return response
-    
-        except ConnectionResetError:
-            # FDM closed a specific connection thread, standard behavior in multi-threading
-            return response
-        except Exception as e:
-            print(f"❌ Error during download for chat {chat_id}, message {message_id}: {e}")
-            logger.error(f"Download error for chat {chat_id}, message {message_id}: {e}")
-            return web.Response(status=500, text=f"Download failed: {str(e)}")
+
+    except ConnectionResetError:
+        # FDM closed a specific connection thread, standard behavior in multi-threading
+        return response
+    except Exception as e:
+        print(f"❌ Error during download for chat {chat_id}, message {message_id}: {e}")
+        logger.error(f"Download error for chat {chat_id}, message {message_id}: {e}")
+        return web.Response(status=500, text=f"Download failed: {str(e)}")
 
 async def dashboard(request):
     html = f"""
@@ -283,18 +277,6 @@ async def on_new_message(event):
 
         file_name = event.message.file.name if event.message.file.name else "Unknown File"
         file_size_mb = event.message.file.size / (1024 * 1024)
-
-        # File size check
-        if file_size_mb > MAX_FILE_SIZE_MB:
-            await event.reply(f"❌ **File Too Large:** {file_name} ({file_size_mb:.2f} MB) exceeds the {MAX_FILE_SIZE_MB} MB limit.")
-            return
-
-        # File extension check (if configured)
-        if ALLOWED_EXTENSIONS:
-            ext = file_name.split('.')[-1].lower() if '.' in file_name else ''
-            if ext not in ALLOWED_EXTENSIONS:
-                await event.reply(f"❌ **File Type Not Allowed:** {file_name} (allowed: {', '.join(ALLOWED_EXTENSIONS)})")
-                return
 
         print(f"\n📥 Received: {file_name} ({file_size_mb:.2f} MB)")
         print(f"🔗 FDM Link: {link}\n")
