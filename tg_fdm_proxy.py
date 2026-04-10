@@ -130,23 +130,43 @@ def find_free_port(start_port=8080, max_attempts=100):
                 continue
     raise RuntimeError(f"No free ports found between {start_port} and {start_port + max_attempts - 1}")
 
-async def ensure_client_connected():
-    """Ensure the Telegram client is connected and authorized."""
-    try:
-        if not client.is_connected():
-            print("🔄 Connecting to Telegram...")
+async def ensure_client_connected(max_retries=5, initial_delay=2):
+    """Ensure the Telegram client is connected and authorized with exponential backoff."""
+    delay = initial_delay
+    
+    for attempt in range(max_retries):
+        try:
+            # Disconnect first if already connected to clear any stale connections
+            if client.is_connected():
+                try:
+                    await client.disconnect()
+                    await asyncio.sleep(1)
+                except:
+                    pass
+            
+            print(f"🔄 Connecting to Telegram (attempt {attempt + 1}/{max_retries})...")
             await client.connect()
-        
-        if not await client.is_user_authorized():
-            print("🔐 Authorizing bot...")
-            await client.start(bot_token=BOT_TOKEN)
-        
-        print("✅ Telegram client ready!")
-        return True
-    except Exception as e:
-        print(f"❌ Failed to connect to Telegram: {e}")
-        logger.error(f"Connection error: {e}")
-        return False
+            
+            if not await client.is_user_authorized():
+                print("🔐 Authorizing bot...")
+                await client.start(bot_token=BOT_TOKEN)
+            
+            print("✅ Telegram client ready!")
+            logger.info("Successfully connected to Telegram")
+            return True
+            
+        except Exception as e:
+            if attempt < max_retries - 1:
+                print(f"⚠️  Connection attempt {attempt + 1} failed: {e}")
+                print(f"   Retrying in {delay} seconds...")
+                logger.warning(f"Connection attempt {attempt + 1} failed: {e}")
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 30)  # Exponential backoff, max 30 seconds
+            else:
+                print(f"❌ Failed to connect to Telegram after {max_retries} attempts: {e}")
+                logger.error(f"Failed to connect after {max_retries} attempts: {e}")
+    
+    return False
 
 async def send_qr_code(event, url, file_name, file_size_mb):
     """Send QR code to user via Telegram."""
@@ -260,16 +280,11 @@ async def handle_download(request):
             except ConnectionError as conn_e:
                 print(f"⚠️  Connection error: {conn_e}, retrying...")
                 logger.warning(f"Connection error for chat {chat_id}, message {message_id}: {conn_e}")
-                # Force reconnection
-                try:
-                    await client.disconnect()
-                    await asyncio.sleep(2)
-                    await client.connect()
-                    if not await client.is_user_authorized():
-                        await client.start(bot_token=BOT_TOKEN)
-                except Exception as reconn_e:
-                    logger.error(f"Reconnection failed: {reconn_e}")
-                await asyncio.sleep(3)
+                # Force reconnection with better handling
+                reconnect_success = await ensure_client_connected(max_retries=3, initial_delay=1)
+                if not reconnect_success:
+                    raise Exception(f"Failed to reconnect after connection error: {conn_e}")
+                await asyncio.sleep(1)
                 continue
             except asyncio.TimeoutError:
                 error_msg = f"Download timeout after {download_timeout} seconds"
@@ -583,26 +598,60 @@ async def main():
 
     try:
         # Keep script running with periodic connection checks
+        last_check = 0
+        check_interval = 60  # Check every minute
+        connection_failed_count = 0
+        max_connection_failures = 3
+        
         while True:
             try:
-                # Check connection health every 5 minutes
-                await asyncio.sleep(300)  # 5 minutes
-                if not client.is_connected():
-                    print("🔄 Connection lost, reconnecting...")
-                    await ensure_client_connected()
+                # Check connection health periodically
+                current_time = asyncio.get_event_loop().time()
+                if current_time - last_check >= check_interval:
+                    if not client.is_connected():
+                        print("⚠️ Connection lost, attempting to reconnect...")
+                        logger.warning("Connection lost, attempting reconnection")
+                        if await ensure_client_connected(max_retries=3, initial_delay=1):
+                            connection_failed_count = 0
+                            print("✅ Reconnected successfully")
+                        else:
+                            connection_failed_count += 1
+                            if connection_failed_count >= max_connection_failures:
+                                print(f"❌ Failed to reconnect {max_connection_failures} times, restarting required")
+                                logger.error(f"Connection lost {max_connection_failures} times, restart needed")
+                            else:
+                                print(f"⚠️ Connection attempt failed ({connection_failed_count}/{max_connection_failures})")
+                    else:
+                        connection_failed_count = 0  # Reset on successful connection
+                    
+                    last_check = current_time
+                
+                await asyncio.sleep(5)  # Check more frequently for graceful shutdown
+                
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 print(f"⚠️ Connection check error: {e}")
                 logger.warning(f"Connection check error: {e}")
-                await asyncio.sleep(60)  # Wait a minute before retrying
+                await asyncio.sleep(10)
                 
     except KeyboardInterrupt:
         print("\n🛑 Stopping proxy server...")
     finally:
-        await site.stop()
-        await runner.cleanup()
-        await client.disconnect()
+        print("🔄 Cleaning up...")
+        try:
+            await site.stop()
+        except:
+            pass
+        try:
+            await runner.cleanup()
+        except:
+            pass
+        try:
+            await client.disconnect()
+        except:
+            pass
+        print("✅ Cleanup complete")
 
 if __name__ == '__main__':
     # Silence verbose access logs from aiohttp
