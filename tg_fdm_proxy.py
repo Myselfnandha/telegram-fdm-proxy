@@ -118,6 +118,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+def find_free_port(start_port=8080, max_attempts=100):
+    """Find an available port starting from start_port."""
+    for port in range(start_port, start_port + max_attempts):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(('127.0.0.1', port))
+                return port
+            except OSError:
+                continue
+    raise RuntimeError(f"No free ports found between {start_port} and {start_port + max_attempts - 1}")
+
 def generate_qr_code(url):
     """Generate QR code from URL."""
     if not qrcode:
