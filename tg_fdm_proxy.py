@@ -8,6 +8,7 @@ import io
 from datetime import datetime
 from aiohttp import web
 from telethon import TelegramClient, events, Button
+from telethon.errors import FloodWaitError, ServerError
 from dotenv import load_dotenv
 try:
     import qrcode
@@ -129,15 +130,23 @@ def find_free_port(start_port=8080, max_attempts=100):
                 continue
     raise RuntimeError(f"No free ports found between {start_port} and {start_port + max_attempts - 1}")
 
-def generate_qr_code(url):
-    """Generate QR code from URL."""
-    if not qrcode:
-        return None
-    qr = qrcode.QRCode(version=1, box_size=10, border=5)
-    qr.add_data(url)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
-    return img
+async def ensure_client_connected():
+    """Ensure the Telegram client is connected and authorized."""
+    try:
+        if not client.is_connected():
+            print("🔄 Connecting to Telegram...")
+            await client.connect()
+        
+        if not await client.is_user_authorized():
+            print("🔐 Authorizing bot...")
+            await client.start(bot_token=BOT_TOKEN)
+        
+        print("✅ Telegram client ready!")
+        return True
+    except Exception as e:
+        print(f"❌ Failed to connect to Telegram: {e}")
+        logger.error(f"Connection error: {e}")
+        return False
 
 async def send_qr_code(event, url, file_name, file_size_mb):
     """Send QR code to user via Telegram."""
@@ -163,62 +172,121 @@ async def handle_download(request):
     message_id = int(request.match_info['message_id'])
 
     try:
-            # Retrieve the specific message containing the media
-            message = await client.get_messages(chat_id, ids=message_id)
-            if not message or not message.media or not hasattr(message, 'file'):
-                return web.Response(status=404, text="Message not found or does not contain media.")
+        # Check if client is connected, reconnect if necessary
+        if not client.is_connected():
+            print("🔄 Reconnecting to Telegram...")
+            await client.connect()
+            if not await client.is_user_authorized():
+                await client.start(bot_token=BOT_TOKEN)
+            print("✅ Reconnected successfully!")
 
-            file_size = message.file.size
-            # Sanitize filename (FDM expects normal filenames)
-            file_name = message.file.name if message.file.name else f"tg_media_{message_id}.bin"
-            file_name = "".join([c for c in file_name if (c.isalnum() or c in " .-_")]).strip()
+        # Retrieve the specific message containing the media
+        message = await client.get_messages(chat_id, ids=message_id)
+        if not message or not message.media or not hasattr(message, 'file'):
+            return web.Response(status=404, text="Message not found or does not contain media.")
 
-            range_header = request.headers.get('Range', '')
-            status = 200
-            start = 0
-            end = file_size - 1
+        file_size = message.file.size
+        # Sanitize filename (FDM expects normal filenames)
+        file_name = message.file.name if message.file.name else f"tg_media_{message_id}.bin"
+        file_name = "".join([c for c in file_name if (c.isalnum() or c in " .-_")]).strip()
 
-            # Parse HTTP Range Header for multi-threaded downloading in FDM
-            if range_header:
-                match = re.search(r'bytes=(\d+)-(\d*)', range_header)
-                if match:
-                    start = int(match.group(1))
-                    if match.group(2):
-                        end = int(match.group(2))
-                status = 206
+        range_header = request.headers.get('Range', '')
+        status = 200
+        start = 0
+        end = file_size - 1
 
-            length = end - start + 1
+        # Parse HTTP Range Header for multi-threaded downloading in FDM
+        if range_header:
+            match = re.search(r'bytes=(\d+)-(\d*)', range_header)
+            if match:
+                start = int(match.group(1))
+                if match.group(2):
+                    end = int(match.group(2))
+            status = 206
 
-            headers = {
-                'Content-Type': 'application/octet-stream',
-                'Content-Disposition': f'attachment; filename="{file_name}"',
-                'Accept-Ranges': 'bytes',
-                'Content-Range': f'bytes {start}-{end}/{file_size}',
-                'Content-Length': str(length)
-            }
+        length = end - start + 1
 
-            response = web.StreamResponse(status=status, headers=headers)
-            await response.prepare(request)
+        headers = {
+            'Content-Type': 'application/octet-stream',
+            'Content-Disposition': f'attachment; filename="{file_name}"',
+            'Accept-Ranges': 'bytes',
+            'Content-Range': f'bytes {start}-{end}/{file_size}',
+            'Content-Length': str(length)
+        }
 
-            # Stream chunks from Telegram server to FDM directly
-            max_retries = 3
-            for attempt in range(max_retries):
+        response = web.StreamResponse(status=status, headers=headers)
+        await response.prepare(request)
+
+        # Stream chunks from Telegram server to FDM directly
+        max_retries = 5  # Increased retries
+        download_timeout = 300  # 5 minutes timeout per attempt
+        
+        for attempt in range(max_retries):
+            try:
+                # Ensure connection is still alive before each attempt
+                if not client.is_connected():
+                    await client.connect()
+                    if not await client.is_user_authorized():
+                        await client.start(bot_token=BOT_TOKEN)
+
+                # Add timeout to prevent hanging downloads
+                download_task = client.iter_download(
+                    message.media,
+                    offset=start,
+                    limit=length,
+                    chunk_size=1024 * 1024  # 1 MB blocks
+                )
+                
+                chunk_count = 0
+                async for chunk in download_task:
+                    await response.write(chunk)
+                    chunk_count += 1
+                    # Log progress for large files every 100 chunks (100MB)
+                    if chunk_count % 100 == 0:
+                        logger.info(f"Downloaded {chunk_count}MB for {file_name}")
+                
+                break  # Success
+            except FloodWaitError as flood_e:
+                wait_time = flood_e.seconds
+                print(f"⚠️  Flood wait: waiting {wait_time} seconds before retry...")
+                logger.warning(f"Flood wait {wait_time}s for chat {chat_id}, message {message_id}")
+                await asyncio.sleep(wait_time)
+                continue  # Retry after waiting
+            except ServerError as server_e:
+                print(f"⚠️  Server error: {server_e}, retrying...")
+                logger.warning(f"Server error for chat {chat_id}, message {message_id}: {server_e}")
+                await asyncio.sleep(5)  # Wait before retry
+                continue
+            except ConnectionError as conn_e:
+                print(f"⚠️  Connection error: {conn_e}, retrying...")
+                logger.warning(f"Connection error for chat {chat_id}, message {message_id}: {conn_e}")
+                # Force reconnection
                 try:
-                    async for chunk in client.iter_download(
-                        message.media,
-                        offset=start,
-                        limit=length,
-                        chunk_size=1024 * 1024  # 1 MB blocks
-                    ):
-                        await response.write(chunk)
-                    break  # Success
-                except Exception as chunk_e:
-                    if attempt == max_retries - 1:
-                        raise chunk_e
-                    print(f"⚠️  Download attempt {attempt + 1} failed: {chunk_e}, retrying...")
-                    await asyncio.sleep(1)  # Wait before retry
-
-            return response
+                    await client.disconnect()
+                    await asyncio.sleep(2)
+                    await client.connect()
+                    if not await client.is_user_authorized():
+                        await client.start(bot_token=BOT_TOKEN)
+                except Exception as reconn_e:
+                    logger.error(f"Reconnection failed: {reconn_e}")
+                await asyncio.sleep(3)
+                continue
+            except asyncio.TimeoutError:
+                error_msg = f"Download timeout after {download_timeout} seconds"
+                print(f"⚠️  Download attempt {attempt + 1} failed: {error_msg}, retrying...")
+                logger.warning(f"Download timeout attempt {attempt + 1} for chat {chat_id}, message {message_id}")
+                if attempt == max_retries - 1:
+                    raise Exception(error_msg)
+            except Exception as chunk_e:
+                if attempt == max_retries - 1:
+                    raise chunk_e
+                print(f"⚠️  Download attempt {attempt + 1} failed: {chunk_e}, retrying...")
+                logger.warning(f"Download attempt {attempt + 1} failed for chat {chat_id}, message {message_id}: {chunk_e}")
+                await asyncio.sleep(3)  # Longer wait before retry
+        # Track successful download
+        file_size_mb = file_size / (1024 * 1024)
+        track_download(file_name, file_size_mb, 'success')
+        return response
 
     except ConnectionResetError:
         # FDM closed a specific connection thread, standard behavior in multi-threading
@@ -226,6 +294,12 @@ async def handle_download(request):
     except Exception as e:
         print(f"❌ Error during download for chat {chat_id}, message {message_id}: {e}")
         logger.error(f"Download error for chat {chat_id}, message {message_id}: {e}")
+        # Track failed download
+        try:
+            file_size_mb = message.file.size / (1024 * 1024) if 'message' in locals() and message else 0
+            track_download(file_name if 'file_name' in locals() else f"unknown_{message_id}", file_size_mb, 'failed')
+        except:
+            pass
         return web.Response(status=500, text=f"Download failed: {str(e)}")
 
 async def dashboard(request):
@@ -480,7 +554,12 @@ async def on_new_message(event):
 async def main():
     print("⏳ Starting Telegram FDM Proxy...")
     logger.info("Starting Telegram FDM Proxy")
-    await client.start(bot_token=BOT_TOKEN)
+    
+    # Ensure client is connected at startup
+    if not await ensure_client_connected():
+        print("❌ Failed to connect to Telegram. Please check your credentials and internet connection.")
+        return
+    
     print("✅ Bot connected successfully!")
     logger.info("Bot connected successfully")
 
@@ -503,8 +582,21 @@ async def main():
     print("\n👉 To use: Forward any file to your Bot on Telegram, then copy the generated link into FDM.")
 
     try:
-        # Keep script running
-        await client.run_until_disconnected()
+        # Keep script running with periodic connection checks
+        while True:
+            try:
+                # Check connection health every 5 minutes
+                await asyncio.sleep(300)  # 5 minutes
+                if not client.is_connected():
+                    print("🔄 Connection lost, reconnecting...")
+                    await ensure_client_connected()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                print(f"⚠️ Connection check error: {e}")
+                logger.warning(f"Connection check error: {e}")
+                await asyncio.sleep(60)  # Wait a minute before retrying
+                
     except KeyboardInterrupt:
         print("\n🛑 Stopping proxy server...")
     finally:
