@@ -5,7 +5,7 @@ set -e
 # Build Standalone Linux Executable for tg-fdm-proxy
 # ==============================================================================
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${SCRIPT_DIR}"
 
 echo "======================================================"
@@ -22,7 +22,7 @@ echo "Ensuring build dependencies..."
 
 mkdir -p build dist
 echo "Compiling Linux standalone binary (ELF x86_64)..."
-./.venv/bin/pyinstaller --clean tg_fdm_proxy_linux.spec
+./.venv/bin/pyinstaller --clean linux/tg_fdm_proxy_linux.spec
 
 if [ -f "dist/tg-fdm-proxy" ]; then
     chmod +x dist/tg-fdm-proxy

@@ -4,6 +4,51 @@ High-speed, multi-threaded HTTP streaming proxy that bridges **Telegram** media 
 
 ---
 
+## 📂 Repository Structure
+
+```
+tg_fdm_proxy/
+├── 📄 Core Logic & UI
+│   ├── tg_fdm_proxy.py           # Main daemon, proxy server & Telegram bot
+│   └── settings_gui.py           # Dark-mode desktop configuration GUI
+│
+├── 🐧 Linux Packaging & Service
+│   └── linux/
+│       ├── install.sh            # User installer (venv, icons, .desktop, systemd)
+│       ├── uninstall.sh          # User uninstaller
+│       ├── PKGBUILD              # Arch Linux native package script
+│       ├── build_linux.sh        # PyInstaller standalone Linux binary builder
+│       └── tg_fdm_proxy_linux.spec # Linux PyInstaller spec
+│
+├── 🪟 Windows Packaging & Startup
+│   └── windows/
+│       ├── build_windows.bat     # 1-click Windows EXE builder
+│       ├── tg_fdm_proxy.spec     # Windows PyInstaller spec (with ICO icon & hidden imports)
+│       ├── install_startup.py    # Portable Windows Startup VBS installer
+│       └── watchdog.bat          # Windows auto-restart watchdog
+│
+├── 🎨 Assets & Desktops
+│   └── assets/
+│       ├── tg-fdm-proxy.png      # 256x256 High-res app icon
+│       ├── tg-fdm-proxy.ico      # Windows multi-size ICO icon
+│       ├── tg-fdm-proxy.svg      # Scalable vector icon
+│       ├── tray_icon.png         # 24x24 Clean system tray icon
+│       ├── tg-fdm-proxy.desktop  # XDG Desktop application launcher
+│       ├── tg-fdm-proxy.service  # Systemd user service unit
+│       └── render_tray_icons.py  # Icon generation & supersampling engine
+│
+├── 🐳 Containers & Docs
+│   └── docker/
+│       ├── Dockerfile
+│       └── docker-compose.yml
+│
+└── ⚙️ Configuration & Environment
+    ├── .env                      # Local configuration
+    └── .gitignore                # Production ignore rules
+```
+
+---
+
 ## ✨ Features
 
 - **⚡ Blazing Fast Streaming**: Multi-range HTTP streaming chunk pipeline with maximum throughput using Telethon and `cryptg`.
@@ -18,7 +63,7 @@ High-speed, multi-threaded HTTP streaming proxy that bridges **Telegram** media 
 
 ---
 
-## 📥 Installation
+## 📥 Installation & Setup
 
 ### 🐧 Linux (Arch / Debian / Ubuntu / Fedora)
 
@@ -28,14 +73,14 @@ git clone https://github.com/Myselfnandha/telegram-fdm-proxy.git
 cd telegram-fdm-proxy
 
 # Run user installer
-chmod +x install.sh
-./install.sh
+chmod +x linux/install.sh
+./linux/install.sh
 ```
 
 **Build Standalone Linux Binary:**
 ```bash
-chmod +x build_linux.sh
-./build_linux.sh
+chmod +x linux/build_linux.sh
+./linux/build_linux.sh
 ```
 
 ---
@@ -52,7 +97,7 @@ cd telegram-fdm-proxy
 # Setup virtual environment & dependencies
 python -m venv .venv
 .\.venv\Scripts\pip install --upgrade pip
-.\.venv\Scripts\pip install -r requirements.txt  # Or install: telethon aiohttp python-dotenv pystray pillow psutil cryptg
+.\.venv\Scripts\pip install telethon aiohttp python-dotenv pystray pillow psutil cryptg
 
 # Run proxy with system tray
 .\.venv\Scripts\python tg_fdm_proxy.py start --tray
@@ -62,26 +107,19 @@ python -m venv .venv
 
 Run the automated build script:
 ```bat
-build_windows.bat
+windows\build_windows.bat
 ```
-Or run PyInstaller manually:
-```powershell
-pyinstaller --clean tg_fdm_proxy.spec
-```
-The compiled binary will be in `dist\tg-fdm-proxy.exe`.
 
 #### 3. Autostart on Windows Boot (Silent Background Mode)
 
-To run the proxy silently in the background whenever Windows starts:
 ```powershell
-python install_startup.py
+python windows\install_startup.py
 ```
-This creates a lightweight VBS startup entry in `AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup`.
 
-#### 4. Continuous Watchdog (Auto-restart on crash)
+#### 4. Continuous Watchdog
 
 ```bat
-watchdog.bat
+windows\watchdog.bat
 ```
 
 ---
@@ -90,7 +128,7 @@ watchdog.bat
 
 | Action | Linux Command | Windows Command |
 | :--- | :--- | :--- |
-| **Start with Tray** | `tg-fdm-proxy start --tray` | `python tg_fdm_proxy.py start --tray` (or `tg-fdm-proxy.exe start --tray`) |
+| **Start with Tray** | `tg-fdm-proxy start --tray` | `python tg_fdm_proxy.py start --tray` |
 | **Start as Daemon** | `tg-fdm-proxy start --daemon` | `python tg_fdm_proxy.py start --daemon` |
 | **Check Status** | `tg-fdm-proxy status` | `python tg_fdm_proxy.py status` |
 | **Settings GUI** | `tg-fdm-proxy config` | `python tg_fdm_proxy.py config` |

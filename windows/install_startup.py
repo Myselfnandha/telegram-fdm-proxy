@@ -4,7 +4,7 @@ import sys
 import shutil
 
 def install_windows_startup():
-    script_dir = os.path.dirname(os.path.abspath(__file__))
+    script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     appdata = os.environ.get("APPDATA", "")
     if not appdata:
         print("[ERROR] APPDATA environment variable not found.")

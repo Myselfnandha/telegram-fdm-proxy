@@ -1,5 +1,7 @@
 @echo off
 title Build Telegram FDM Proxy (Windows EXE)
+cd /d "%~dp0\.."
+
 echo ======================================================
 echo  Building Standalone Windows Executable with PyInstaller
 echo ======================================================
@@ -17,7 +19,7 @@ if not exist "build" mkdir build
 if not exist "dist" mkdir dist
 
 echo Compiling Windows executable (tg-fdm-proxy.exe)...
-call .venv\Scripts\pyinstaller --clean tg_fdm_proxy.spec
+call .venv\Scripts\pyinstaller --clean windows\tg_fdm_proxy.spec
 
 if exist "dist\tg-fdm-proxy.exe" (
     echo ======================================================
