@@ -1,0 +1,17 @@
+[Unit]
+Description=Telegram FDM Proxy Bot Service
+Documentation=https://github.com/Myselfnandha/AeroHub
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/tg-fdm-proxy --daemon
+Restart=always
+RestartSec=5
+TimeoutStopSec=10
+KillMode=process
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

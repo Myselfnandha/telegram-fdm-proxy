@@ -1,0 +1,33 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Telegram FDM Proxy
+GenericName=Telegram Download Proxy
+Comment=High-speed Telegram media stream proxy for Free Download Manager and aria2
+Exec=tg-fdm-proxy start --tray
+Icon=tg-fdm-proxy
+Terminal=false
+Categories=Network;FileTransfer;Utility;
+Keywords=telegram;fdm;download;proxy;aria2;media;streaming;
+StartupNotify=true
+Actions=Tray;Daemon;Logs;Stop;Config;
+
+[Desktop Action Tray]
+Name=Start with System Tray
+Exec=tg-fdm-proxy start --tray
+
+[Desktop Action Daemon]
+Name=Start in Background
+Exec=tg-fdm-proxy start --daemon
+
+[Desktop Action Logs]
+Name=View Live Logs
+Exec=tg-fdm-proxy logs
+
+[Desktop Action Config]
+Name=Edit Settings (.env)
+Exec=tg-fdm-proxy config
+
+[Desktop Action Stop]
+Name=Stop Proxy
+Exec=tg-fdm-proxy stop

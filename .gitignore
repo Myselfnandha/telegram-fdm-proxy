@@ -1,0 +1,27 @@
+# Environment & Credentials
+.env
+*.session
+*.session-journal
+*.session.backup
+
+# Python & Virtualenv
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+
+# Build & Dist Artifacts
+build/
+dist/
+bin/
+*.exe
+*.spec.bak
+
+# Runtime & Logs
+*.log
+*.log.*
+*.pid
+download_analytics.json
+Logs/

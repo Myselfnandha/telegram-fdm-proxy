@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  tg-fdm-proxy:
+    build: .
+    ports:
+      - "8080:8080"  # Adjust port as needed
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./logs:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    # Optional: Mount session files if you want persistence
+    # volumes:
+    #   - ./fdm_proxy_bot_session.session:/app/fdm_proxy_bot_session.session
