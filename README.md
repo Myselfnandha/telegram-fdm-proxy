@@ -1,6 +1,6 @@
 # 🚀 Telegram FDM Proxy
 
-High-speed, multi-threaded HTTP streaming proxy that bridges **Telegram** media downloads with download managers like **Free Download Manager (FDM)**, **aria2**, and **NeatDM** on **Linux (Arch, Ubuntu, Fedora)** and **Windows**.
+High-speed, multi-threaded HTTP streaming proxy that bridges **Telegram** media downloads with download managers like **Free Download Manager (FDM)**, **aria2**, and **NeatDM** on **Linux (Arch, Ubuntu, Fedora)** and **Windows (10 / 11)**.
 
 ---
 
@@ -8,17 +8,19 @@ High-speed, multi-threaded HTTP streaming proxy that bridges **Telegram** media 
 
 - **⚡ Blazing Fast Streaming**: Multi-range HTTP streaming chunk pipeline with maximum throughput using Telethon and `cryptg`.
 - **🎯 Auto-Send Integration**: Automatically dispatches incoming Telegram files directly into Free Download Manager (Native & Flatpak), `aria2c`, or NeatDM.
-- **🎨 Desktop Suite & System Tray**: Native AppIndicator DBus tray icon with quick actions (Open Bot, Live Logs, Settings, Quit).
+- **🎨 Desktop Suite & System Tray**: Native AppIndicator (Linux) & Win32 Notification Area (Windows) tray icon with quick actions (Open Bot, Live Logs, Settings, Quit).
 - **⚙️ Graphical Settings UI**: Dark-mode Tkinter configuration window to manage credentials, notifications, and filters with ease.
 - **🔕 Smart Notification Debouncing**: Built-in rate limiting prevents notification spam during batch downloads.
-- **📦 Arch Linux Packaging**: Native `PKGBUILD`, systemd user unit (`tg-fdm-proxy.service`), and `.desktop` application launcher.
+- **📦 Packaging & Background Daemons**: 
+  - **Linux**: Native `PKGBUILD`, systemd user unit (`tg-fdm-proxy.service`), and `.desktop` application launcher.
+  - **Windows**: Standalone `.exe` packaging via PyInstaller, Windows Startup integration, and watchdog auto-restart script.
 - **🛡️ Auto-Recovery & PID Lock**: Single-instance daemon protection with process recycling and resilient socket reconnection.
 
 ---
 
 ## 📥 Installation
 
-### Arch Linux / General Linux
+### 🐧 Linux (Arch / Debian / Ubuntu / Fedora)
 
 ```bash
 # Clone repository
@@ -30,8 +32,7 @@ chmod +x install.sh
 ./install.sh
 ```
 
-### Building Standalone Linux Binary
-
+**Build Standalone Linux Binary:**
 ```bash
 chmod +x build_linux.sh
 ./build_linux.sh
@@ -39,31 +40,68 @@ chmod +x build_linux.sh
 
 ---
 
-## 🚀 Usage
+### 🪟 Windows (10 / 11)
 
-### Command Line Interface (CLI)
+#### 1. Quick Run with Python
 
-```bash
-tg-fdm-proxy start --tray       # Start with System Tray integration
-tg-fdm-proxy start --daemon     # Start in headless background mode
-tg-fdm-proxy status             # Check service status & detected download managers
-tg-fdm-proxy config             # Open graphical settings window
-tg-fdm-proxy logs -f            # Follow live streaming logs
-tg-fdm-proxy stop               # Cleanly shut down proxy
+```powershell
+# Clone repository
+git clone https://github.com/Myselfnandha/telegram-fdm-proxy.git
+cd telegram-fdm-proxy
+
+# Setup virtual environment & dependencies
+python -m venv .venv
+.\.venv\Scripts\pip install --upgrade pip
+.\.venv\Scripts\pip install -r requirements.txt  # Or install: telethon aiohttp python-dotenv pystray pillow psutil cryptg
+
+# Run proxy with system tray
+.\.venv\Scripts\python tg_fdm_proxy.py start --tray
 ```
 
-### Systemd User Service
+#### 2. Building Standalone Windows Executable (`tg-fdm-proxy.exe`)
 
-```bash
-systemctl --user enable --now tg-fdm-proxy   # Enable on startup
-systemctl --user status tg-fdm-proxy         # Check service status
+Run the automated build script:
+```bat
+build_windows.bat
 ```
+Or run PyInstaller manually:
+```powershell
+pyinstaller --clean tg_fdm_proxy.spec
+```
+The compiled binary will be in `dist\tg-fdm-proxy.exe`.
+
+#### 3. Autostart on Windows Boot (Silent Background Mode)
+
+To run the proxy silently in the background whenever Windows starts:
+```powershell
+python install_startup.py
+```
+This creates a lightweight VBS startup entry in `AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup`.
+
+#### 4. Continuous Watchdog (Auto-restart on crash)
+
+```bat
+watchdog.bat
+```
+
+---
+
+## 🚀 CLI Commands Reference
+
+| Action | Linux Command | Windows Command |
+| :--- | :--- | :--- |
+| **Start with Tray** | `tg-fdm-proxy start --tray` | `python tg_fdm_proxy.py start --tray` (or `tg-fdm-proxy.exe start --tray`) |
+| **Start as Daemon** | `tg-fdm-proxy start --daemon` | `python tg_fdm_proxy.py start --daemon` |
+| **Check Status** | `tg-fdm-proxy status` | `python tg_fdm_proxy.py status` |
+| **Settings GUI** | `tg-fdm-proxy config` | `python tg_fdm_proxy.py config` |
+| **View Live Logs** | `tg-fdm-proxy logs -f` | `python tg_fdm_proxy.py logs -f` |
+| **Stop Proxy** | `tg-fdm-proxy stop` | `python tg_fdm_proxy.py stop` |
 
 ---
 
 ## ⚙️ Configuration (`.env`)
 
-You can configure settings via the **Settings GUI** (`tg-fdm-proxy config`) or edit `.env` directly:
+You can configure settings via the **Settings GUI** (`tg-fdm-proxy config` or right-click tray icon) or edit `.env` directly:
 
 ```ini
 API_ID=your_api_id

@@ -1,12 +1,25 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-
 a = Analysis(
     ['tg_fdm_proxy.py'],
-    pathex=[],
+    pathex=['.'],
     binaries=[],
-    datas=[('.env', '.')],
-    hiddenimports=[],
+    datas=[
+        ('assets', 'assets'),
+    ],
+    hiddenimports=[
+        'pystray',
+        'PIL',
+        'cryptg',
+        'aiohttp',
+        'telethon',
+        'psutil',
+        'dotenv',
+        'tkinter',
+        'tkinter.ttk',
+        'tkinter.messagebox',
+        'settings_gui',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -22,7 +35,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='tg_fdm_proxy',
+    name='tg-fdm-proxy',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -35,4 +48,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='assets/tg-fdm-proxy.ico',
 )
