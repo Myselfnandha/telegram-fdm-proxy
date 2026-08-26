@@ -98,18 +98,19 @@ echo "Installing systemd user service unit to ${SYSTEMD_DIR}/tg-fdm-proxy.servic
 cat << EOF > "${SYSTEMD_DIR}/tg-fdm-proxy.service"
 [Unit]
 Description=Telegram FDM Proxy Bot Service
-After=network.target network-online.target
+After=network.target network-online.target graphical-session.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory=${SCRIPT_DIR}
-ExecStart=${BIN_DIR}/tg-fdm-proxy start --daemon
+ExecStart=${BIN_DIR}/tg-fdm-proxy start --tray
 Restart=always
 RestartSec=5
 TimeoutStopSec=10
 KillMode=process
 Environment=PYTHONUNBUFFERED=1
+PassEnvironment=DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS
 
 [Install]
 WantedBy=default.target
