@@ -596,9 +596,6 @@ KEYWORD_BLOCK: Set[str] = set()
 KEYWORD_ALLOW: Set[str] = set()
 _bot_username = ""
 
-dc_locks: Dict[int, asyncio.Lock] = {}
-dc_auth_keys: Dict[int, Any] = {}
-
 # Message cache for fast lookup and 404 prevention
 _message_cache: Dict[Tuple[int, int], Any] = {}
 
@@ -692,7 +689,7 @@ async def handle_download(request: web.Request) -> web.StreamResponse:
 
                 chunk_size = 512 * 1024
                 aligned_start = start - (start % chunk_size)
-                max_in_flight = 4
+                max_in_flight = 16
                 in_flight_futures = []
                 current_request_offset = aligned_start
 
