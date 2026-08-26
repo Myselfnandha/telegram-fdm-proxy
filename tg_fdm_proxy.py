@@ -684,18 +684,36 @@ async def handle_download(request: web.Request) -> web.StreamResponse:
         response = web.StreamResponse(status=status, headers=headers)
         await response.prepare(request)
 
-        # Stream chunks using Telethon's native persistent connection pool (Zero FloodWait)
+        align_unit = 512 * 1024
+        aligned_start = start - (start % align_unit)
+        discard_bytes = start - aligned_start
+        aligned_limit = length + discard_bytes
+
+        # Stream chunks using Telethon's native persistent connection pool (Aligned Range Resuming)
         max_retries = 2
         for attempt in range(max_retries):
             try:
+                first_chunk = True
                 async for chunk in client.iter_download(
                     message.media,
-                    offset=start,
-                    limit=length,
-                    chunk_size=2 * 1024 * 1024,  # 2 MB — Telethon maximum for highest throughput
+                    offset=aligned_start,
+                    limit=aligned_limit,
+                    request_size=align_unit,
+                    chunk_size=align_unit,
                 ):
-                    await response.write(chunk)
-                    _bytes_written += len(chunk)
+                    if first_chunk:
+                        first_chunk = False
+                        if discard_bytes > 0:
+                            chunk = chunk[discard_bytes:]
+
+                    if chunk:
+                        bytes_remaining = length - _bytes_written
+                        if len(chunk) > bytes_remaining:
+                            chunk = chunk[:bytes_remaining]
+                        await response.write(chunk)
+                        _bytes_written += len(chunk)
+                        if _bytes_written >= length:
+                            break
                 break  # Success
             except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
                 raise  # client disconnected — let outer handler deal with it
