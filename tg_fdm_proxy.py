@@ -596,6 +596,34 @@ KEYWORD_BLOCK: Set[str] = set()
 KEYWORD_ALLOW: Set[str] = set()
 _bot_username = ""
 
+_auth_key_locks: Dict[int, asyncio.Lock] = {}
+dc_semaphores: Dict[int, asyncio.Semaphore] = {}
+
+def get_dc_semaphore(dc_id: int) -> asyncio.Semaphore:
+    if dc_id not in dc_semaphores:
+        dc_semaphores[dc_id] = asyncio.Semaphore(3)
+    return dc_semaphores[dc_id]
+
+async def get_dc_auth_key(dc_id: int) -> Any:
+    if dc_id == client.session.dc_id:
+        return client.session.auth_key
+    if dc_id in dc_auth_keys:
+        return dc_auth_keys[dc_id]
+
+    if dc_id not in _auth_key_locks:
+        _auth_key_locks[dc_id] = asyncio.Lock()
+
+    async with _auth_key_locks[dc_id]:
+        if dc_id in dc_auth_keys:
+            return dc_auth_keys[dc_id]
+        logger.info(f"[SENDER] Exporting authorization for DC {dc_id}...")
+        temp_sender = await client._create_exported_sender(dc_id)
+        auth_key = temp_sender.auth_key
+        dc_auth_keys[dc_id] = auth_key
+        await temp_sender.disconnect()
+        logger.info(f"[SENDER] Cached auth key for DC {dc_id}.")
+        return auth_key
+
 # Message cache for fast lookup and 404 prevention
 _message_cache: Dict[Tuple[int, int], Any] = {}
 
@@ -656,108 +684,33 @@ async def handle_download(request: web.Request) -> web.StreamResponse:
         response = web.StreamResponse(status=status, headers=headers)
         await response.prepare(request)
 
-        dc_id, input_location = utils.get_input_location(message.media)
-        sender = None
+        # Stream chunks using Telethon's native persistent connection pool (Zero FloodWait)
         max_retries = 2
-
         for attempt in range(max_retries):
             try:
-                if dc_id not in dc_locks:
-                    dc_locks[dc_id] = asyncio.Lock()
-
-                async with dc_locks[dc_id]:
-                    auth_key = dc_auth_keys.get(dc_id)
-                    if not auth_key:
-                        if dc_id == client.session.dc_id:
-                            auth_key = client.session.auth_key
-                            dc_auth_keys[dc_id] = auth_key
-                        else:
-                            logger.info(f"[SENDER] Exporting authorization for DC {dc_id}...")
-                            temp_sender = await client._create_exported_sender(dc_id)
-                            auth_key = temp_sender.auth_key
-                            dc_auth_keys[dc_id] = auth_key
-                            await temp_sender.disconnect()
-                            logger.info(f"[SENDER] Cached auth key for DC {dc_id}.")
-
-                    dc = await client._get_dc(dc_id)
-                    sender = MTProtoSender(auth_key, loggers=client._log)
-                    await sender.connect(client._connection(
-                        dc.ip_address, dc.port, dc.id,
-                        loggers=client._log,
-                        proxy=client._proxy
-                    ))
-
-                chunk_size = 512 * 1024
-                aligned_start = start - (start % chunk_size)
-                max_in_flight = 16
-                in_flight_futures = []
-                current_request_offset = aligned_start
-
-                while _bytes_written < length or in_flight_futures:
-                    while len(in_flight_futures) < max_in_flight and current_request_offset < file_size:
-                        req = GetFileRequest(input_location, offset=current_request_offset, limit=chunk_size)
-                        await req.resolve(client, utils)
-                        fut = sender.send(req)
-                        in_flight_futures.append((fut, current_request_offset))
-                        current_request_offset += chunk_size
-
-                    if in_flight_futures:
-                        fut, chunk_offset = in_flight_futures.pop(0)
-                        result = None
-                        chunk_attempt = 0
-                        while True:
-                            try:
-                                result = await fut
-                                break
-                            except Exception as e:
-                                if hasattr(e, 'seconds'):
-                                    logger.warning(f"Flood wait {e.seconds}s at offset {chunk_offset}. Sleeping...")
-                                    await asyncio.sleep(e.seconds)
-                                    req = GetFileRequest(input_location, offset=chunk_offset, limit=chunk_size)
-                                    await req.resolve(client, utils)
-                                    fut = sender.send(req)
-                                    continue
-                                chunk_attempt += 1
-                                if chunk_attempt >= 3:
-                                    raise e
-                                req = GetFileRequest(input_location, offset=chunk_offset, limit=chunk_size)
-                                await req.resolve(client, utils)
-                                fut = sender.send(req)
-
-                        if not result or not result.bytes:
-                            in_flight_futures.clear()
-                            break
-
-                        data = result.bytes
-                        if chunk_offset < start:
-                            discard = start - chunk_offset
-                            data = data[discard:] if len(data) > discard else b""
-
-                        if data:
-                            bytes_remaining = length - _bytes_written
-                            if len(data) > bytes_remaining:
-                                data = data[:bytes_remaining]
-                            await response.write(data)
-                            _bytes_written += len(data)
-
-                        if len(result.bytes) < chunk_size:
-                            in_flight_futures.clear()
-                            break
-                break
+                async for chunk in client.iter_download(
+                    message.media,
+                    offset=start,
+                    limit=length,
+                    chunk_size=2 * 1024 * 1024,  # 2 MB — Telethon maximum for highest throughput
+                ):
+                    await response.write(chunk)
+                    _bytes_written += len(chunk)
+                break  # Success
             except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
-                raise
+                raise  # client disconnected — let outer handler deal with it
             except Exception as chunk_e:
                 if attempt == max_retries - 1:
                     raise chunk_e
-                logger.warning(f"Download attempt {attempt + 1} retry: {chunk_e}")
-                await asyncio.sleep(1)
-            finally:
-                if sender:
+                err = str(chunk_e).lower()
+                if "disconnected" in err or "not connected" in err:
+                    logger.warning(f"[RECONNECT] Telethon disconnected — attempting reconnect...")
                     try:
-                        await sender.disconnect()
-                    except Exception:
-                        pass
-                    sender = None
+                        await client.connect()
+                    except Exception as re_err:
+                        logger.error(f"[RECONNECT] Failed: {re_err}")
+                logger.warning(f"Download attempt {attempt + 1} failed: {chunk_e}, retrying...")
+                await asyncio.sleep(1)
 
         _key = (chat_id, message_id)
         if _key in download_registry and not download_registry[_key].get("notified"):
