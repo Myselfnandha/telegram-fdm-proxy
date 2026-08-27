@@ -7,7 +7,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=/usr/bin/tg-fdm-proxy start --tray
-Restart=always
+Restart=on-failure
 RestartSec=5
 TimeoutStopSec=10
 KillMode=process

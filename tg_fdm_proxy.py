@@ -995,6 +995,11 @@ def _start_tray_icon(port: int):
 
     def _on_quit(icon, item):
         logger.info("[TRAY] Exit requested via system tray")
+        if sys.platform != "win32":
+            try:
+                subprocess.Popen(["systemctl", "--user", "stop", "tg-fdm-proxy.service"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
         icon.stop()
         release_pid_lock()
         os._exit(0)
